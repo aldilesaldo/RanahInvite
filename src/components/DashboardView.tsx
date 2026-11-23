@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import QRCode from 'qrcode';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Check } from 'lucide-react';
 import {
   EventMetadata,
   NavTab,
@@ -9,6 +9,7 @@ import {
   Recipient,
   SavedEventRecord,
   TemplateImages,
+  WorkflowStatusSummary,
 } from '../types';
 import {
   computeBrowserWrappedLines,
@@ -21,14 +22,12 @@ import { generateInvitationListReportPdf } from '../utils/reportPdf';
 import { exportInvitationListReportExcel } from '../utils/reportExcel';
 import { buildRsvpUrl } from '../utils/rsvp';
 import { EventHistoryPanel } from './EventHistoryPanel';
-import { PaginationBar } from './PaginationBar';
 import {
   RecipientPickerDropdown,
   SAMPLE_PREVIEW_RECIPIENT,
 } from './RecipientPickerDropdown';
 import {
   CountUpNumber,
-  HighlightedText,
   ProgressRing,
   SmartMarqueeText,
 } from './UiPolish';
@@ -45,6 +44,7 @@ interface DashboardViewProps {
   onSelectPreviewRecipient: (id: string) => void;
   events: SavedEventRecord[];
   activeEventId: string;
+  workflowStatus: WorkflowStatusSummary;
   onSelectEvent: (eventId: string) => void;
   onCreateEvent: (metadata: EventMetadata) => void;
   onDuplicateEvent: (eventId: string) => void;
@@ -52,9 +52,7 @@ interface DashboardViewProps {
   onDeleteEvent: (eventId: string) => void;
   onNavigate: (tab: NavTab) => void;
   onPreviewRecipient: (recipient: Recipient, page?: 1 | 2) => void;
-  onDownloadSinglePdf: (recipient: Recipient) => void;
   onNotify?: (message: string, type?: 'success' | 'error') => void;
-  downloadingId: string | null;
   searchQuery?: string;
 }
 
@@ -230,6 +228,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onSelectPreviewRecipient,
   events,
   activeEventId,
+  workflowStatus,
   onSelectEvent,
   onCreateEvent,
   onDuplicateEvent,
@@ -237,18 +236,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onDeleteEvent,
   onNavigate,
   onPreviewRecipient,
-  onDownloadSinglePdf,
   onNotify,
-  downloadingId,
   searchQuery = '',
 }) => {
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
-  const [listPage, setListPage] = useState<number>(1);
   const [isExportingReportPdf, setIsExportingReportPdf] = useState(false);
-  const DASHBOARD_PAGE_SIZE = 10;
 
   const handleExportReportPdf = async () => {
-    if (filteredRecipients.length === 0 || isExportingReportPdf) return;
+    const targetList = filteredRecipients.length > 0 ? filteredRecipients : recipients;
+    if (targetList.length === 0 || isExportingReportPdf) return;
     setIsExportingReportPdf(true);
     try {
       const filterSummary = searchQuery.trim()
@@ -256,12 +252,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         : 'Seluruh Daftar Penerima';
       const { bytes, filename } = await generateInvitationListReportPdf({
         metadata,
-        recipients: filteredRecipients,
+        recipients: targetList,
         filterSummary,
       });
       triggerBlobDownload(bytes, filename, 'application/pdf');
       onNotify?.(
-        `Laporan PDF (${filteredRecipients.length} penerima) berhasil diekspor: ${filename}`
+        `Laporan PDF (${targetList.length} penerima) berhasil diekspor: ${filename}`
       );
     } catch (err) {
       onNotify?.(
@@ -274,18 +270,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   };
 
   const handleExportReportExcel = () => {
-    if (filteredRecipients.length === 0) return;
+    const targetList = filteredRecipients.length > 0 ? filteredRecipients : recipients;
+    if (targetList.length === 0) return;
     try {
       const filterSummary = searchQuery.trim()
         ? `Hasil Pencarian: "${searchQuery.trim()}"`
         : 'Seluruh Daftar Penerima';
       const { filename } = exportInvitationListReportExcel({
         metadata,
-        recipients: filteredRecipients,
+        recipients: targetList,
         filterSummary,
       });
       onNotify?.(
-        `Laporan Excel (${filteredRecipients.length} penerima) berhasil diekspor: ${filename}`
+        `Laporan Excel (${targetList.length} penerima) berhasil diekspor: ${filename}`
       );
     } catch (err) {
       onNotify?.(
@@ -294,20 +291,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       );
     }
   };
-
-  useEffect(() => {
-    setListPage(1);
-  }, [activeEventId, filteredRecipients.length]);
-
-  const totalListPages = Math.max(
-    1,
-    Math.ceil(filteredRecipients.length / DASHBOARD_PAGE_SIZE)
-  );
-  const safeListPage = Math.min(listPage, totalListPages);
-  const paginatedDashboardRecipients = useMemo(() => {
-    const start = (safeListPage - 1) * DASHBOARD_PAGE_SIZE;
-    return filteredRecipients.slice(start, start + DASHBOARD_PAGE_SIZE);
-  }, [filteredRecipients, safeListPage]);
 
   const previewRecipient = useMemo(
     () =>
@@ -349,6 +332,63 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     totalRecipients > 0 ? Math.round((confirmedCount / totalRecipients) * 100) : 0;
   const generatedPercent =
     totalRecipients > 0 ? Math.round((generatedCount / totalRecipients) * 100) : 0;
+
+  const pipelineCards: {
+    stepNumber: number;
+    tab: Exclude<NavTab, 'dashboard'>;
+    title: string;
+    detail: string;
+    statusText: string;
+    ready: boolean;
+    actionLabel: string;
+  }[] = [
+    {
+      stepNumber: 1,
+      tab: 'setup',
+      title: 'Info & Template',
+      detail: `${templates.pageCount} halaman · ${templates.page1Width} × ${templates.page1Height} px`,
+      statusText: workflowStatus.setupReady ? 'Siap' : 'Perlu dilengkapi',
+      ready: workflowStatus.setupReady,
+      actionLabel: 'Atur Info & Gambar',
+    },
+    {
+      stepNumber: 2,
+      tab: 'guests',
+      title: 'Daftar Penerima',
+      detail:
+        totalRecipients > 0
+          ? `${totalRecipients} penerima · ${confirmedCount} konfirmasi`
+          : 'Belum ada penerima terdaftar',
+      statusText: workflowStatus.guestsReady ? 'Terisi' : 'Belum diisi',
+      ready: workflowStatus.guestsReady,
+      actionLabel: totalRecipients > 0 ? 'Kelola Penerima' : 'Isi Penerima',
+    },
+    {
+      stepNumber: 3,
+      tab: 'layout',
+      title: 'Tata Letak',
+      detail: `${workflowStatus.visibleOverlayCount} elemen teks & QR aktif di kanvas`,
+      statusText: workflowStatus.layoutReady ? 'Siap' : 'Perlu dicek',
+      ready: workflowStatus.layoutReady,
+      actionLabel: 'Sesuaikan Kanvas',
+    },
+    {
+      stepNumber: 4,
+      tab: 'batch',
+      title: 'Generate & Laporan',
+      detail:
+        totalRecipients > 0
+          ? `${generatedCount} dari ${totalRecipients} PDF telah dibuat`
+          : 'Menunggu daftar penerima diisi',
+      statusText: workflowStatus.batchDone
+        ? 'Selesai'
+        : totalRecipients > 0
+          ? 'Siap ekspor'
+          : 'Menunggu',
+      ready: workflowStatus.batchDone,
+      actionLabel: 'Buka Ekspor PDF',
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -461,7 +501,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </motion.div>
       </div>
 
-      {/* Middle Panel: 5/7 Split — Saved Events List + Larger Active Design Preview */}
+      {/* Middle Panel: 5/7 Split — Saved Events List + Active Design Preview */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-stretch">
         <div className="xl:col-span-5 flex flex-col">
           <EventHistoryPanel
@@ -575,11 +615,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="flex flex-wrap items-center gap-2.5 pt-1 shrink-0">
             <button
               type="button"
-              onClick={() => onNavigate('design')}
+              onClick={() => onNavigate(workflowStatus.recommendedStep)}
               className="flex-1 inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-full text-[13px] font-semibold text-white bg-[#1F9B96] hover:bg-[#167F7B] transition-colors shadow-xs whitespace-nowrap"
             >
-              <BrandIcon name="action-edit-design" white className="w-5 h-5" />
-              <span>Editor Kanvas</span>
+              <span>{workflowStatus.recommendedStepLabel}</span>
+              <ArrowRight className="w-4 h-4" />
             </button>
 
             <button
@@ -588,38 +628,35 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-full border border-[#DDEEF3] bg-[#F4FBFD] text-[13px] font-semibold text-[#1B1B4B] hover:bg-[#E3F5FA] transition-colors whitespace-nowrap"
             >
               <BrandIcon name="action-eye" className="w-5 h-5 text-[#1B1B4B]" />
-              <span>Pratinjau</span>
+              <span>Pratinjau Penuh</span>
             </button>
           </div>
         </div>
       </div>
 
-      {/* Bottom Panel: Quick Recipient List & Single PDF Download */}
-      <div className="rounded-[22px] border border-[#E5F1F5] bg-white overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-b border-[#EDF6F9]">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <IconBadge name="nav-guests" size="sm" />
-            <div className="min-w-0 flex-1">
-              <h3 className="font-display font-bold text-[15px] text-[#1B1B4B]">
-                <SmartMarqueeText text={`Daftar Penerima — ${metadata.eventName}`} />
-              </h3>
-              <p className="text-[12px] text-[#757E96] mt-0.5 tabular-nums">
-                <CountUpNumber value={filteredRecipients.length} /> penerima
-              </p>
-            </div>
+      {/* Bottom Panel: 4-Stage Guided Invitation Production Pipeline + Quick Official Reports */}
+      <div className="rounded-[22px] border border-[#E5F1F5] bg-white p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#EDF6F9]">
+          <div className="min-w-0 flex-1">
+            <h3 className="font-display font-bold text-[15.5px] text-[#1B1B4B]">
+              <SmartMarqueeText text={`Alur Pembuatan Undangan — ${metadata.eventName}`} />
+            </h3>
+            <p className="text-[12px] text-[#757E96] mt-0.5">
+              Ikuti 4 tahap berurutan berikut untuk menyiapkan dan menghasilkan undangan PDF
+            </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={handleExportReportPdf}
-              disabled={filteredRecipients.length === 0 || isExportingReportPdf}
+              disabled={totalRecipients === 0 || isExportingReportPdf}
               title={
-                filteredRecipients.length === 0
-                  ? 'Daftar penerima masih kosong'
-                  : `Ekspor laporan PDF resmi (${filteredRecipients.length} penerima)`
+                totalRecipients === 0
+                  ? 'Isi daftar penerima di Tahap 2 untuk membuat laporan PDF'
+                  : `Ekspor laporan PDF resmi (${totalRecipients} penerima)`
               }
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#1F9B96] text-white text-[12px] font-semibold hover:bg-[#167F7B] disabled:opacity-45 disabled:cursor-not-allowed transition-colors shadow-xs whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-[#1F9B96] text-white text-[12px] font-semibold hover:bg-[#167F7B] disabled:opacity-45 disabled:cursor-not-allowed transition-colors shadow-xs whitespace-nowrap"
             >
               <BrandIcon name="doc-pdf" white className="w-4 h-4" />
               <span>{isExportingReportPdf ? 'Membuat PDF...' : 'Laporan PDF'}</span>
@@ -628,144 +665,83 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <button
               type="button"
               onClick={handleExportReportExcel}
-              disabled={filteredRecipients.length === 0}
+              disabled={totalRecipients === 0}
               title={
-                filteredRecipients.length === 0
-                  ? 'Daftar penerima masih kosong'
-                  : `Ekspor laporan Excel (.xlsx) resmi (${filteredRecipients.length} penerima)`
+                totalRecipients === 0
+                  ? 'Isi daftar penerima di Tahap 2 untuk membuat laporan Excel'
+                  : `Ekspor laporan Excel (.xlsx) resmi (${totalRecipients} penerima)`
               }
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#F9DE6C] text-[#1B1B4B] text-[12px] font-semibold hover:bg-[#F3D34F] disabled:opacity-45 disabled:cursor-not-allowed transition-colors shadow-xs whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-[#F9DE6C] text-[#1B1B4B] text-[12px] font-semibold hover:bg-[#F3D34F] disabled:opacity-45 disabled:cursor-not-allowed transition-colors shadow-xs whitespace-nowrap"
             >
               <BrandIcon name="action-download-doc" className="w-4 h-4 text-[#1B1B4B]" />
               <span>Laporan XLS</span>
             </button>
-
-            <button
-              type="button"
-              onClick={() => onNavigate('guests')}
-              className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-[#1F9B96] hover:text-[#167F7B] hover:underline whitespace-nowrap ml-1"
-            >
-              <span>Kelola & Impor Excel</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
           </div>
         </div>
 
-        {filteredRecipients.length === 0 ? (
-          <div className="py-10 px-6 text-center text-[13px] text-[#757E96]">
-            Tidak ada penerima yang cocok dengan filter atau kata kunci pencarian saat ini.
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[#E5F1F5] bg-[#F4FBFD] text-[12px] font-semibold text-[#757E96]">
-                  <th className="py-3 px-4 whitespace-nowrap">Kode</th>
-                  <th className="py-3 px-4">Penerima Undangan</th>
-                  <th className="py-3 px-4">Instansi Tujuan</th>
-                  <th className="py-3 px-4 whitespace-nowrap">Kehadiran (RSVP)</th>
-                  <th className="py-3 px-4 whitespace-nowrap">Status PDF</th>
-                  <th className="py-3 px-4 text-right whitespace-nowrap">PDF Satuan</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#EDF6F9] text-[13px]">
-                {paginatedDashboardRecipients.map((rec, idx) => (
-                  <motion.tr
-                    key={rec.id}
-                    initial={{ opacity: 0, y: 6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{
-                      duration: 0.2,
-                      delay: idx * 0.05,
-                      ease: [0.22, 1, 0.36, 1],
-                    }}
-                    onClick={() => onPreviewRecipient(rec)}
-                    className="hover:bg-[#EBF8FC] transition-colors cursor-pointer"
-                  >
-                    <td className="py-3 px-4 font-mono text-[12px] text-[#757E96] tabular-nums whitespace-nowrap">
-                      <HighlightedText text={rec.invitationCode} query={searchQuery} />
-                    </td>
-                    <td
-                      title={rec.recipientName}
-                      className="py-3 px-4 font-semibold text-[#1B1B4B] max-w-[260px] truncate"
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5">
+          {pipelineCards.map((stage) => {
+            const isRecommended = workflowStatus.recommendedStep === stage.tab;
+            return (
+              <button
+                key={stage.tab}
+                type="button"
+                onClick={() => onNavigate(stage.tab)}
+                className={`group text-left rounded-[18px] p-4 border transition-all duration-150 flex flex-col justify-between gap-3 ${
+                  isRecommended
+                    ? 'border-[#1F9B96] bg-[#EBF9F7]/75 hover:bg-[#E0F6F2]'
+                    : 'border-[#E5F1F5] bg-[#F8FCFE] hover:bg-white hover:border-[#B5E4F1]'
+                }`}
+              >
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className={`w-7 h-7 rounded-full inline-flex items-center justify-center text-[12px] font-bold tabular-nums ${
+                        stage.ready
+                          ? 'bg-[#DCF5F1] text-[#157A76]'
+                          : isRecommended
+                            ? 'bg-[#1F9B96] text-white'
+                            : 'bg-white border border-[#DCEEF4] text-[#757E96]'
+                      }`}
                     >
-                      <HighlightedText
-                        text={rec.recipientName}
-                        query={searchQuery}
-                      />
-                    </td>
-                    <td
-                      title={rec.institution}
-                      className="py-3 px-4 text-[#757E96] max-w-[230px] truncate"
-                    >
-                      <HighlightedText
-                        text={rec.institution}
-                        query={searchQuery}
-                      />
-                    </td>
-                    <td className="py-3 px-4 whitespace-nowrap">
-                      {rec.rsvpStatus === 'attending' ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#DCF5F1] text-[12px] font-semibold text-[#157A76]">
-                          <BrandIcon name="rsvp-attending" className="w-3.5 h-3.5" />
-                          <span>Hadir</span>
-                        </span>
-                      ) : rec.rsvpStatus === 'represented' ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#E3F5FA] text-[12px] font-semibold text-[#167F7B]">
-                          <BrandIcon name="rsvp-represented" className="w-3.5 h-3.5" />
-                          <span>Diwakilkan</span>
-                        </span>
-                      ) : rec.rsvpStatus === 'declined' ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#FDE8EE] text-[12px] font-semibold text-[#B83B5E]">
-                          <BrandIcon name="rsvp-declined" className="w-3.5 h-3.5" />
-                          <span>Berhalangan</span>
-                        </span>
+                      {stage.ready ? (
+                        <Check className="w-3.5 h-3.5 stroke-[2.75]" />
                       ) : (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#F2F7FA] text-[12px] font-medium text-[#757E96]">
-                          <BrandIcon name="rsvp-pending" className="w-3.5 h-3.5" />
-                          <span>Belum Konfirmasi</span>
-                        </span>
+                        stage.stepNumber
                       )}
-                    </td>
-                    <td className="py-3 px-4 whitespace-nowrap">
-                      {rec.status === 'generated' ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#DCF5F1] text-[12px] font-semibold text-[#157A76]">
-                          <BrandIcon name="status-check" className="w-3.5 h-3.5" />
-                          <span>Generated</span>
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#FFF7D6] text-[12px] font-semibold text-[#9A7409]">
-                          <BrandIcon name="rsvp-pending" className="w-3.5 h-3.5" />
-                          <span>Ready</span>
-                        </span>
-                      )}
-                    </td>
-                    <td
-                      className="py-3 px-4 text-right whitespace-nowrap"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <button
-                        type="button"
-                        disabled={downloadingId === rec.id}
-                        onClick={() => onDownloadSinglePdf(rec)}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[12px] font-semibold text-[#167F7B] bg-[#E3F5FA] hover:bg-[#CCEBF4] transition-colors disabled:opacity-50"
-                      >
-                        <BrandIcon name="action-download-doc" className="w-4 h-4" />
-                        <span>{downloadingId === rec.id ? 'Menyiapkan...' : 'Unduh PDF'}</span>
-                      </button>
-                    </td>
-                  </motion.tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                    </span>
 
-        <PaginationBar
-          currentPage={safeListPage}
-          totalItems={filteredRecipients.length}
-          pageSize={DASHBOARD_PAGE_SIZE}
-          onPageChange={setListPage}
-        />
+                    <span
+                      className={`text-[11.5px] font-semibold ${
+                        stage.ready
+                          ? 'text-[#157A76]'
+                          : isRecommended
+                            ? 'text-[#1F9B96]'
+                            : 'text-[#757E96]'
+                      }`}
+                    >
+                      {stage.statusText}
+                    </span>
+                  </div>
+
+                  <div>
+                    <div className="font-display font-bold text-[14px] text-[#1B1B4B]">
+                      {stage.stepNumber}. {stage.title}
+                    </div>
+                    <div className="text-[12px] text-[#757E96] mt-0.5 leading-relaxed tabular-nums">
+                      {stage.detail}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-[#E5F1F5]/80 text-[12px] font-semibold text-[#1F9B96] group-hover:text-[#167F7B]">
+                  <span>{stage.actionLabel}</span>
+                  <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
+                </div>
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

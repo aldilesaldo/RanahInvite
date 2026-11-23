@@ -5,11 +5,12 @@ import {
   Plus,
   X,
 } from 'lucide-react';
-import { BankSyncUpdate, EventMetadata, Recipient, RsvpStatus } from '../types';
+import { BankSyncUpdate, EventMetadata, NavTab, Recipient, RsvpStatus } from '../types';
 import { PdfBankChecklistModal } from './PdfBankChecklistModal';
 import { PaginationBar } from './PaginationBar';
 import { CountUpNumber, HighlightedText } from './UiPolish';
 import { BrandIcon, IconBadge } from './BrandIcon';
+import { StepFooterNav } from './WorkflowStepperBar';
 import {
   ColumnMapping,
   ParsedImportResult,
@@ -40,6 +41,7 @@ interface GuestListViewProps {
   onPreviewRecipient: (recipient: Recipient) => void;
   onDownloadSinglePdf: (recipient: Recipient) => void;
   onSimulateRsvp: (recipient: Recipient) => void;
+  onNavigate: (tab: NavTab) => void;
   downloadingId: string | null;
   searchQuery?: string;
 }
@@ -62,6 +64,7 @@ export const GuestListView: React.FC<GuestListViewProps> = ({
   onPreviewRecipient,
   onDownloadSinglePdf,
   onSimulateRsvp,
+  onNavigate,
   downloadingId,
   searchQuery = '',
 }) => {
@@ -266,8 +269,11 @@ export const GuestListView: React.FC<GuestListViewProps> = ({
         <div className="flex items-center gap-3">
           <IconBadge name="nav-guests" size="md" />
           <div>
-            <h2 className="font-display font-bold text-[20px] text-[#1B1B4B]">
-              Daftar Tamu & RSVP
+            <div className="text-[11.5px] font-semibold text-[#1F9B96]">
+              Tahap 2 dari 4
+            </div>
+            <h2 className="font-display font-bold text-[20px] text-[#1B1B4B] leading-tight">
+              Daftar Penerima &amp; RSVP
             </h2>
             <p className="text-[13px] text-[#757E96] mt-0.5 tabular-nums">
               <CountUpNumber value={displayedRecipients.length} /> dari{' '}
@@ -1038,6 +1044,20 @@ export const GuestListView: React.FC<GuestListViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Sequential Step Navigation */}
+      <StepFooterNav
+        prevLabel="Kembali: Info & Template"
+        onPrev={() => onNavigate('setup')}
+        nextLabel="Lanjut: Atur Tata Letak"
+        onNext={() => onNavigate('layout')}
+        nextHint={
+          recipients.length > 0
+            ? `Cek penempatan nama untuk ${recipients.length} penerima di kanvas`
+            : 'Anda tetap dapat mengatur tata letak menggunakan nama contoh'
+        }
+        nextVariant="teal"
+      />
 
       {/* Bank Daftar PDF Modal (Checklist Kelompok & Per Penerima) */}
       <PdfBankChecklistModal

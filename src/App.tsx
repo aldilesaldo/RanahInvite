@@ -14,6 +14,7 @@ import {
   Recipient,
   SavedEventRecord,
   TemplateImages,
+  WorkflowStatusSummary,
 } from './types';
 import {
   StoredSystemDefault,
@@ -40,9 +41,11 @@ import {
 } from './utils/rsvp';
 import { Sidebar } from './components/Sidebar';
 import { DashboardView } from './components/DashboardView';
-import { DesignUploadView } from './components/DesignUploadView';
+import { EventSetupView } from './components/EventSetupView';
+import { LayoutEditorView } from './components/LayoutEditorView';
 import { GuestListView } from './components/GuestListView';
 import { BatchQueueView } from './components/BatchQueueView';
+import { WorkflowStepperBar } from './components/WorkflowStepperBar';
 import { InvitationPreviewModal } from './components/InvitationPreviewModal';
 import { GuestRsvpPage } from './components/GuestRsvpPage';
 import { FloatingToast } from './components/UiPolish';
@@ -208,6 +211,14 @@ export default function App() {
     message: string;
   } | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const workspaceScrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    workspaceScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    if (typeof window !== 'undefined' && window.scrollY > 0) {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [activeTab]);
 
   const zipResultRef = useRef<{ blob: Blob; filename: string } | null>(null);
   const pdfCacheRef = useRef<Map<string, { filename: string; bytes: Uint8Array }>>(
@@ -423,6 +434,52 @@ export default function App() {
     [recipients]
   );
 
+  const workflowStatus = useMemo<WorkflowStatusSummary>(() => {
+    const setupReady = Boolean(
+      metadata.eventName.trim() && templates.page1DataUrl
+    );
+    const recipientCount = recipients.length;
+    const guestsReady = recipientCount > 0;
+    const visibleOverlayCount = overlays.filter((o) => o.visible).length;
+    const layoutReady = visibleOverlayCount > 0 && Boolean(templates.page1DataUrl);
+    const generatedCount = recipients.filter((r) => r.status === 'generated').length;
+    const confirmedCount = recipients.filter(
+      (r) => r.rsvpStatus === 'attending' || r.rsvpStatus === 'represented'
+    ).length;
+    const batchDone = recipientCount > 0 && generatedCount === recipientCount;
+
+    let recommendedStep: Exclude<NavTab, 'dashboard'> = 'layout';
+    let recommendedStepLabel = 'Tahap 3: Atur Tata Letak';
+
+    if (!setupReady) {
+      recommendedStep = 'setup';
+      recommendedStepLabel = 'Tahap 1: Lengkapi Info & Template';
+    } else if (!guestsReady) {
+      recommendedStep = 'guests';
+      recommendedStepLabel = 'Tahap 2: Isi Daftar Penerima';
+    } else if (generatedCount === 0) {
+      recommendedStep = 'layout';
+      recommendedStepLabel = 'Tahap 3: Atur Tata Letak & Pratinjau';
+    } else {
+      recommendedStep = 'batch';
+      recommendedStepLabel = 'Tahap 4: Generate PDF & Laporan';
+    }
+
+    return {
+      setupReady,
+      guestsReady,
+      layoutReady,
+      batchDone,
+      recipientCount,
+      generatedCount,
+      confirmedCount,
+      visibleOverlayCount,
+      pageCount: templates.pageCount,
+      recommendedStep,
+      recommendedStepLabel,
+    };
+  }, [metadata.eventName, templates.page1DataUrl, templates.pageCount, recipients, overlays]);
+
   // Event History Handlers
   const handleSelectEvent = (eventId: string) => {
     const found = events.find((e) => e.id === eventId);
@@ -448,16 +505,7 @@ export default function App() {
         ...o,
         page: singlePageOnly ? 1 : o.page,
       })),
-      recipients: [
-        {
-          id: `rec-${now}-1`,
-          salutation: 'Kepada Yth.',
-          recipientName: 'Tamu Kehormatan',
-          institution: newMeta.organizer,
-          invitationCode: 'RI-001',
-          status: 'ready',
-        },
-      ],
+      recipients: [],
       isCompleted: false,
       createdAt: now,
       updatedAt: now,
@@ -465,8 +513,11 @@ export default function App() {
 
     setEvents((prev) => [newRecord, ...prev]);
     setActiveEventId(newId);
-    setPreviewRecipientId(newRecord.recipients[0].id);
-    showToast(`Event baru "${newMeta.eventName}" berhasil dibuat.`);
+    setPreviewRecipientId('');
+    setActiveTab('setup');
+    showToast(
+      `Event baru "${newMeta.eventName}" dibuat — silakan lengkapi template undangan di Tahap 1.`
+    );
   };
 
   const handleDuplicateEvent = (eventId: string) => {
@@ -1098,6 +1149,8 @@ export default function App() {
             activeTab={activeTab}
             onSelectTab={setActiveTab}
             onGenerateAll={handleStartBatchExport}
+            activeEventName={metadata.eventName}
+            workflowStatus={workflowStatus}
             readyCount={readyCount}
             totalCount={recipients.length}
             isGeneratingBatch={isGeneratingBatch}
@@ -1110,7 +1163,7 @@ export default function App() {
             className="flex-1 min-w-0 rounded-[26px] flex flex-col overflow-hidden shadow-[0_8px_28px_-12px_rgba(27,27,75,0.14)]"
             style={{ backgroundColor: 'var(--bg-surface-main)' }}
           >
-            {/* Airy Minimalist PinHome Top Search & Action Bar */}
+            {/* Airy Minimalist PinHome Top Bar */}
             <header className="flex flex-wrap items-center justify-between gap-4 px-5 sm:px-8 py-4 border-b border-[#EDF5F8]">
               <div className="flex items-center gap-3 flex-1 min-w-[240px]">
                 <button
@@ -1122,25 +1175,42 @@ export default function App() {
                   <Menu className="w-5 h-5" />
                 </button>
 
-                <div className="relative flex-1 max-w-md">
-                  <Search className="w-4 h-4 text-[#1B1B4B]/70 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    ref={searchInputRef}
-                    type="search"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Cari nama penerima, instansi, atau kode..."
-                    className="w-full pl-10 pr-9 py-2 rounded-full border border-transparent bg-[#F4FBFD] text-[13px] text-[#1B1B4B] placeholder:text-[#8E96AB] focus:bg-white focus:border-[#BCE6F2] focus:outline-none focus:ring-2 focus:ring-[#1F9B96]/30 transition-all"
-                  />
-                  {!searchQuery && (
-                    <span
-                      aria-hidden="true"
-                      className="hidden sm:inline-flex items-center justify-center pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[11px] font-mono text-[#9AA3B8]"
-                    >
-                      /
-                    </span>
-                  )}
-                </div>
+                {activeTab === 'guests' || activeTab === 'batch' ? (
+                  <div className="relative flex-1 max-w-md">
+                    <Search className="w-4 h-4 text-[#1B1B4B]/70 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      ref={searchInputRef}
+                      type="search"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Cari nama penerima, instansi, atau kode..."
+                      className="w-full pl-10 pr-9 py-2 rounded-full border border-transparent bg-[#F4FBFD] text-[13px] text-[#1B1B4B] placeholder:text-[#8E96AB] focus:bg-white focus:border-[#BCE6F2] focus:outline-none focus:ring-2 focus:ring-[#1F9B96]/30 transition-all"
+                    />
+                    {!searchQuery && (
+                      <span
+                        aria-hidden="true"
+                        className="hidden sm:inline-flex items-center justify-center pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[11px] font-mono text-[#9AA3B8]"
+                      >
+                        /
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <div className="min-w-0">
+                    <div className="font-display font-bold text-[15px] text-[#1B1B4B] truncate">
+                      {activeTab === 'dashboard'
+                        ? 'Beranda Event'
+                        : activeTab === 'setup'
+                          ? 'Tahap 1 · Persiapan Info & Template'
+                          : 'Tahap 3 · Penataan Kanvas Undangan'}
+                    </div>
+                    <div className="text-[12px] text-[#757E96] truncate">
+                      {activeTab === 'dashboard'
+                        ? 'Pilih event aktif atau buat kegiatan baru untuk memulai alur undangan'
+                        : `${metadata.eventName} · ${templates.pageCount} Halaman`}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="flex flex-wrap items-center gap-2.5">
@@ -1156,8 +1226,20 @@ export default function App() {
               </div>
             </header>
 
-            {/* Dynamic Workspace Viewport with Smooth Tab Transition */}
-            <div className="flex-1 overflow-y-auto px-5 sm:px-7 py-6">
+            {/* Dynamic Workspace Viewport with Persistent Stepper (Steps 1–4) & Smooth Tab Transition */}
+            <div
+              ref={workspaceScrollRef}
+              className="flex-1 overflow-y-auto px-5 sm:px-7 py-6"
+            >
+              {activeTab !== 'dashboard' && (
+                <WorkflowStepperBar
+                  activeStep={activeTab}
+                  metadata={metadata}
+                  workflowStatus={workflowStatus}
+                  onSelectTab={setActiveTab}
+                />
+              )}
+
               <AnimatePresence mode="wait" initial={false}>
                 <motion.div
                   key={activeTab}
@@ -1178,6 +1260,7 @@ export default function App() {
                       onSelectPreviewRecipient={setPreviewRecipientId}
                       events={events}
                       activeEventId={activeEvent.id}
+                      workflowStatus={workflowStatus}
                       onSelectEvent={handleSelectEvent}
                       onCreateEvent={handleCreateEvent}
                       onDuplicateEvent={handleDuplicateEvent}
@@ -1185,32 +1268,21 @@ export default function App() {
                       onDeleteEvent={handleDeleteEvent}
                       onNavigate={setActiveTab}
                       onPreviewRecipient={handlePreviewRecipient}
-                      onDownloadSinglePdf={handleDownloadSinglePdf}
                       onNotify={showToast}
-                      downloadingId={downloadingId}
                       searchQuery={searchQuery}
                     />
                   )}
 
-                  {activeTab === 'design' && (
-                    <DesignUploadView
-                      eventId={activeEvent.id}
+                  {activeTab === 'setup' && (
+                    <EventSetupView
                       metadata={metadata}
                       onChangeMetadata={setMetadata}
                       templates={templates}
                       onChangeTemplates={setTemplates}
                       overlays={overlays}
                       onChangeOverlays={setOverlays}
-                      recipients={recipients}
-                      previewRecipientId={previewRecipientId}
-                      onSelectPreviewRecipient={setPreviewRecipientId}
-                      onResetOverlays={handleResetOverlays}
-                      onSaveAsDefault={handleSaveAsDefaultSystem}
-                      onClearCustomDefault={handleClearSystemDefault}
-                      onCopyDefaultJson={handleCopySystemDefaultJson}
-                      hasCustomDefault={Boolean(systemDefaultState)}
-                      customDefaultSavedAt={systemDefaultState?.savedAt ?? null}
-                      onOpenFullPreview={handlePreviewRecipient}
+                      recipientCount={recipients.length}
+                      onNavigate={setActiveTab}
                     />
                   )}
 
@@ -1233,8 +1305,30 @@ export default function App() {
                       onPreviewRecipient={handlePreviewRecipient}
                       onDownloadSinglePdf={handleDownloadSinglePdf}
                       onSimulateRsvp={setSimulatedRsvpRecipient}
+                      onNavigate={setActiveTab}
                       downloadingId={downloadingId}
                       searchQuery={searchQuery}
+                    />
+                  )}
+
+                  {activeTab === 'layout' && (
+                    <LayoutEditorView
+                      eventId={activeEvent.id}
+                      metadata={metadata}
+                      templates={templates}
+                      overlays={overlays}
+                      onChangeOverlays={setOverlays}
+                      recipients={recipients}
+                      previewRecipientId={previewRecipientId}
+                      onSelectPreviewRecipient={setPreviewRecipientId}
+                      onResetOverlays={handleResetOverlays}
+                      onSaveAsDefault={handleSaveAsDefaultSystem}
+                      onClearCustomDefault={handleClearSystemDefault}
+                      onCopyDefaultJson={handleCopySystemDefaultJson}
+                      hasCustomDefault={Boolean(systemDefaultState)}
+                      customDefaultSavedAt={systemDefaultState?.savedAt ?? null}
+                      onOpenFullPreview={handlePreviewRecipient}
+                      onNavigate={setActiveTab}
                     />
                   )}
 
@@ -1255,6 +1349,9 @@ export default function App() {
                       onStartBatchExport={handleStartBatchExport}
                       onDownloadZipArchive={handleDownloadZipArchive}
                       onDownloadSinglePdf={handleDownloadSinglePdf}
+                      onPreviewRecipient={handlePreviewRecipient}
+                      onNavigate={setActiveTab}
+                      onNotify={showToast}
                       downloadingId={downloadingId}
                       searchQuery={searchQuery}
                     />

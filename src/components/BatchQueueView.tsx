@@ -1,11 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import { Loader2 } from 'lucide-react';
-import { EventMetadata, Recipient, TemplateImages } from '../types';
-import { buildSafePdfFilename } from '../utils/pdfEngine';
+import { EventMetadata, NavTab, Recipient, TemplateImages } from '../types';
+import { buildSafePdfFilename, triggerBlobDownload } from '../utils/pdfEngine';
+import { generateInvitationListReportPdf } from '../utils/reportPdf';
+import { exportInvitationListReportExcel } from '../utils/reportExcel';
 import { PaginationBar } from './PaginationBar';
 import { CountUpNumber, HighlightedText, SmartMarqueeText } from './UiPolish';
 import { BrandIcon, IconBadge } from './BrandIcon';
+import { StepFooterNav } from './WorkflowStepperBar';
 
 interface BatchQueueViewProps {
   metadata: EventMetadata;
@@ -23,13 +26,15 @@ interface BatchQueueViewProps {
   onStartBatchExport: () => void;
   onDownloadZipArchive: () => void;
   onDownloadSinglePdf: (recipient: Recipient) => void;
+  onPreviewRecipient: (recipient: Recipient) => void;
+  onNavigate: (tab: NavTab) => void;
+  onNotify?: (message: string, type?: 'success' | 'error') => void;
   downloadingId: string | null;
   searchQuery?: string;
 }
 
 export const BatchQueueView: React.FC<BatchQueueViewProps> = ({
   metadata,
-  templates,
   recipients,
   totalRecipientsCount,
   availableGroups,
@@ -43,11 +48,15 @@ export const BatchQueueView: React.FC<BatchQueueViewProps> = ({
   onStartBatchExport,
   onDownloadZipArchive,
   onDownloadSinglePdf,
+  onPreviewRecipient,
+  onNavigate,
+  onNotify,
   downloadingId,
   searchQuery = '',
 }) => {
   const BATCH_PAGE_SIZE = 10;
   const [currentPage, setCurrentPage] = useState(1);
+  const [isExportingReportPdf, setIsExportingReportPdf] = useState(false);
 
   const progressPct =
     batchTotalCount > 0
@@ -76,15 +85,69 @@ export const BatchQueueView: React.FC<BatchQueueViewProps> = ({
       .map((rec, offset) => ({ rec, idx: start + offset }));
   }, [recipients, safePage]);
 
+  const buildFilterSummary = () => {
+    const parts: string[] = [];
+    if (groupFilter !== 'Semua') parts.push(`Kelompok: ${groupFilter}`);
+    if (searchQuery.trim()) parts.push(`Pencarian: "${searchQuery.trim()}"`);
+    return parts.length > 0 ? parts.join(' | ') : 'Seluruh Daftar Penerima';
+  };
+
+  const handleExportReportPdf = async () => {
+    if (recipients.length === 0 || isExportingReportPdf) return;
+    setIsExportingReportPdf(true);
+    try {
+      const { bytes, filename } = await generateInvitationListReportPdf({
+        metadata,
+        recipients,
+        filterSummary: buildFilterSummary(),
+      });
+      triggerBlobDownload(bytes, filename, 'application/pdf');
+      onNotify?.(
+        `Laporan PDF (${recipients.length} penerima) berhasil diekspor: ${filename}`
+      );
+    } catch (err) {
+      onNotify?.(
+        err instanceof Error ? err.message : 'Gagal mengekspor laporan PDF.',
+        'error'
+      );
+    } finally {
+      setIsExportingReportPdf(false);
+    }
+  };
+
+  const handleExportReportExcel = () => {
+    if (recipients.length === 0) return;
+    try {
+      const { filename } = exportInvitationListReportExcel({
+        metadata,
+        recipients,
+        filterSummary: buildFilterSummary(),
+      });
+      onNotify?.(
+        `Laporan Excel (${recipients.length} penerima) berhasil diekspor: ${filename}`
+      );
+    } catch (err) {
+      onNotify?.(
+        err instanceof Error ? err.message : 'Gagal mengekspor laporan Excel.',
+        'error'
+      );
+    }
+  };
+
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* Step Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#EDF6F9] pb-4">
         <div className="flex items-center gap-3">
           <IconBadge name="nav-export-pdf" size="md" />
-          <h2 className="font-display font-bold text-[20px] text-[#1B1B4B]">
-            Ekspor PDF & ZIP
-          </h2>
+          <div>
+            <div className="text-[11.5px] font-semibold text-[#1F9B96]">
+              Tahap 4 dari 4
+            </div>
+            <h2 className="font-display font-bold text-[20px] text-[#1B1B4B] leading-tight">
+              Generate PDF &amp; Laporan Resmi
+            </h2>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
@@ -120,7 +183,7 @@ export const BatchQueueView: React.FC<BatchQueueViewProps> = ({
         </div>
       </div>
 
-      {/* Unified 2-Column Executive Control Strip: PinHome Ice Sky Target + Soft Mint Progress */}
+      {/* Unified 2-Column Executive Control Strip: Target Kelompok + Render Progress */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
         {/* Left: Target Kelompok Ekspor (PinHome Ice Sky Surface) */}
         <div className="lg:col-span-5 rounded-[22px] border border-[#B5E4F1] bg-[#E3F5FA] p-4 flex flex-col justify-between gap-3">
@@ -230,101 +293,171 @@ export const BatchQueueView: React.FC<BatchQueueViewProps> = ({
         </div>
       </div>
 
+      {/* Official Reports Export Strip (PDF & Excel) */}
+      <div className="rounded-[22px] border border-[#DFEFF4] bg-[#F4FBFD] px-5 py-3.5 flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-display font-bold text-[14px] text-[#1B1B4B]">
+            Rekap &amp; Laporan Daftar Undangan
+          </div>
+          <div className="text-[12px] text-[#757E96]">
+            Unduh rekap resmi penerima beserta status RSVP dalam format PDF (A4) atau Excel (.xlsx)
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={handleExportReportPdf}
+            disabled={recipients.length === 0 || isExportingReportPdf}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#1F9B96] text-white text-[12px] font-semibold hover:bg-[#167F7B] disabled:opacity-45 disabled:cursor-not-allowed transition-colors shadow-xs whitespace-nowrap"
+          >
+            <BrandIcon name="doc-pdf" white className="w-4 h-4" />
+            <span>{isExportingReportPdf ? 'Membuat PDF...' : 'Laporan PDF'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleExportReportExcel}
+            disabled={recipients.length === 0}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#F9DE6C] text-[#1B1B4B] text-[12px] font-semibold hover:bg-[#F3D34F] disabled:opacity-45 disabled:cursor-not-allowed transition-colors shadow-xs whitespace-nowrap"
+          >
+            <BrandIcon name="action-download-doc" className="w-4 h-4 text-[#1B1B4B]" />
+            <span>Laporan XLS</span>
+          </button>
+        </div>
+      </div>
+
       {/* Output Queue Table */}
       <div className="rounded-[22px] border border-[#E5F1F5] bg-white overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-[#E5F1F5] bg-[#F4FBFD] text-[12px] font-semibold text-[#757E96]">
-                <th className="py-3 px-4">#</th>
-                <th className="py-3 px-4">Penerima & Instansi</th>
-                <th className="py-3 px-4">Nama Berkas PDF Otomatis</th>
-                <th className="py-3 px-4 whitespace-nowrap">Status</th>
-                <th className="py-3 px-4 text-right whitespace-nowrap">Unduh Satuan</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#EDF6F9] text-[13px]">
-              {visibleSlice.map(({ rec, idx }) => {
-                const autoFilename = computedFilenames[idx];
-                const isItemBusy =
-                  rec.status === 'generating' || downloadingId === rec.id;
+        {recipients.length === 0 ? (
+          <div className="py-14 px-6 text-center">
+            <p className="font-display font-bold text-[15px] text-[#1B1B4B]">
+              Belum ada penerima undangan untuk digenerate
+            </p>
+            <p className="text-[13px] text-[#757E96] mt-1 mb-4">
+              Tambahkan daftar tamu terlebih dahulu di Tahap 2 melalui Bank Daftar PDF, impor Excel, atau input manual.
+            </p>
+            <button
+              type="button"
+              onClick={() => onNavigate('guests')}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-[13px] font-semibold text-white bg-[#1F9B96] hover:bg-[#167F7B] transition-colors"
+            >
+              <BrandIcon name="nav-guests" white className="w-4.5 h-4.5" />
+              <span>Isi Daftar Penerima (Tahap 2)</span>
+            </button>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-[#E5F1F5] bg-[#F4FBFD] text-[12px] font-semibold text-[#757E96]">
+                  <th className="py-3 px-4">#</th>
+                  <th className="py-3 px-4">Penerima &amp; Instansi</th>
+                  <th className="py-3 px-4">Nama Berkas PDF Otomatis</th>
+                  <th className="py-3 px-4 whitespace-nowrap">Status</th>
+                  <th className="py-3 px-4 text-right whitespace-nowrap">Aksi</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#EDF6F9] text-[13px]">
+                {visibleSlice.map(({ rec, idx }) => {
+                  const autoFilename = computedFilenames[idx];
+                  const isItemBusy =
+                    rec.status === 'generating' || downloadingId === rec.id;
 
-                return (
-                  <tr key={rec.id} className="hover:bg-[#EBF8FC] transition-colors">
-                    <td className="py-3 px-4 text-[12px] text-[#757E96] tabular-nums">
-                      {idx + 1}
-                    </td>
-                    <td className="py-3 px-4 max-w-[260px]">
-                      <div
-                        title={rec.recipientName}
-                        className="font-semibold text-[#1B1B4B] truncate"
-                      >
-                        <HighlightedText
-                          text={rec.recipientName}
-                          query={searchQuery}
-                        />
-                      </div>
-                      <div
-                        title={rec.institution}
-                        className="text-[12px] text-[#757E96] truncate"
-                      >
-                        <HighlightedText
-                          text={rec.institution}
-                          query={searchQuery}
-                        />
-                      </div>
-                    </td>
-                    <td
-                      title={autoFilename}
-                      className="py-3 px-4 font-mono text-[12px] text-[#757E96] max-w-[320px] truncate"
+                  return (
+                    <tr
+                      key={rec.id}
+                      onClick={() => onPreviewRecipient(rec)}
+                      className="hover:bg-[#EBF8FC] transition-colors cursor-pointer"
                     >
-                      {autoFilename}
-                    </td>
-                    <td className="py-3 px-4 whitespace-nowrap">
-                      {rec.status === 'generated' ? (
-                        <motion.span
-                          key="generated"
-                          initial={{ scale: 0.88, opacity: 0.7 }}
-                          animate={{ scale: 1, opacity: 1 }}
-                          transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#DCF5F1] text-[12px] font-semibold text-[#157A76]"
+                      <td className="py-3 px-4 text-[12px] text-[#757E96] tabular-nums">
+                        {idx + 1}
+                      </td>
+                      <td className="py-3 px-4 max-w-[260px]">
+                        <div
+                          title={rec.recipientName}
+                          className="font-semibold text-[#1B1B4B] truncate"
                         >
-                          <BrandIcon name="status-check" className="w-3.5 h-3.5" />
-                          <span>Generated</span>
-                        </motion.span>
-                      ) : rec.status === 'generating' ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#E3F5FA] text-[12px] font-semibold text-[#167F7B]">
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          <span>Rendering</span>
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#FFF7D6] text-[12px] font-semibold text-[#9A7409]">
-                          <BrandIcon name="rsvp-pending" className="w-3.5 h-3.5" />
-                          <span>Ready</span>
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 px-4 text-right whitespace-nowrap">
-                      <button
-                        type="button"
-                        disabled={isItemBusy || isGeneratingBatch}
-                        onClick={() => onDownloadSinglePdf(rec)}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[12px] font-semibold text-[#167F7B] bg-[#E3F5FA] hover:bg-[#CCEBF4] transition-colors disabled:opacity-50"
+                          <HighlightedText
+                            text={rec.recipientName}
+                            query={searchQuery}
+                          />
+                        </div>
+                        <div
+                          title={rec.institution}
+                          className="text-[12px] text-[#757E96] truncate"
+                        >
+                          <HighlightedText
+                            text={rec.institution}
+                            query={searchQuery}
+                          />
+                        </div>
+                      </td>
+                      <td
+                        title={autoFilename}
+                        className="py-3 px-4 font-mono text-[12px] text-[#757E96] max-w-[320px] truncate"
                       >
-                        {isItemBusy ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        {autoFilename}
+                      </td>
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        {rec.status === 'generated' ? (
+                          <motion.span
+                            key="generated"
+                            initial={{ scale: 0.88, opacity: 0.7 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#DCF5F1] text-[12px] font-semibold text-[#157A76]"
+                          >
+                            <BrandIcon name="status-check" className="w-3.5 h-3.5" />
+                            <span>Generated</span>
+                          </motion.span>
+                        ) : rec.status === 'generating' ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#E3F5FA] text-[12px] font-semibold text-[#167F7B]">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Rendering</span>
+                          </span>
                         ) : (
-                          <BrandIcon name="action-download-doc" className="w-4 h-4" />
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#FFF7D6] text-[12px] font-semibold text-[#9A7409]">
+                            <BrandIcon name="rsvp-pending" className="w-3.5 h-3.5" />
+                            <span>Ready</span>
+                          </span>
                         )}
-                        <span>Unduh PDF</span>
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                      </td>
+                      <td
+                        className="py-3 px-4 text-right whitespace-nowrap"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => onPreviewRecipient(rec)}
+                            title="Pratinjau Undangan"
+                            className="p-1.5 rounded-full text-[#757E96] hover:text-[#1F9B96] hover:bg-[#E3F5FA] transition-colors"
+                          >
+                            <BrandIcon name="action-eye" className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isItemBusy || isGeneratingBatch}
+                            onClick={() => onDownloadSinglePdf(rec)}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[12px] font-semibold text-[#167F7B] bg-[#E3F5FA] hover:bg-[#CCEBF4] transition-colors disabled:opacity-50"
+                          >
+                            {isItemBusy ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <BrandIcon name="action-download-doc" className="w-4 h-4" />
+                            )}
+                            <span>Unduh PDF</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         <PaginationBar
           currentPage={safePage}
@@ -333,6 +466,16 @@ export const BatchQueueView: React.FC<BatchQueueViewProps> = ({
           onPageChange={setCurrentPage}
         />
       </div>
+
+      {/* Sequential Step Footer */}
+      <StepFooterNav
+        prevLabel="Kembali: Tata Letak"
+        onPrev={() => onNavigate('layout')}
+        nextLabel="Selesai · Beranda Event"
+        onNext={() => onNavigate('dashboard')}
+        nextHint="Kelola event lain atau pantau ringkasan RSVP"
+        nextVariant="teal"
+      />
     </div>
   );
 };

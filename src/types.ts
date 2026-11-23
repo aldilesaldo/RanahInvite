@@ -1,8 +1,23 @@
 export type NavTab =
   | 'dashboard'
-  | 'design'
+  | 'setup'
   | 'guests'
+  | 'layout'
   | 'batch';
+
+export interface WorkflowStatusSummary {
+  setupReady: boolean;
+  guestsReady: boolean;
+  layoutReady: boolean;
+  batchDone: boolean;
+  recipientCount: number;
+  generatedCount: number;
+  confirmedCount: number;
+  visibleOverlayCount: number;
+  pageCount: 1 | 2;
+  recommendedStep: Exclude<NavTab, 'dashboard'>;
+  recommendedStepLabel: string;
+}
 
 export type OverlayFontFamily =
   | 'Fraunces'
